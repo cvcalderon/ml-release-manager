@@ -1,0 +1,15 @@
+{
+  "release_name": "example_v1",
+  "project_name": "example-service",
+  "service_type": "fastapi",
+  "entrypoint": "service.app:app",
+  "api_port": 8000,
+  "created_at": "AUTO",
+  "created_by": "AUTO",
+  "description": "Generic example release bundle",
+  "healthcheck": {
+    "path": "/health",
+    "method": "GET"
+  },
+  "notes": "This is a minimal generic release."
+}

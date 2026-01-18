@@ -1,0 +1,46 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtualenv
+.venv/
+venv/
+.env
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+runtime/
+tmp/
+*.pid
+
+# Secrets
+*.env
+*.key
+*.pem
+
+# Release artifacts (do NOT version)
+*.zip
+*.pkl
+*.joblib
+assets/models/
+releases/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Nginx / systemd generated files
+*.service

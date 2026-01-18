@@ -1,0 +1,349 @@
+======================================================================
+GENERIC RELEASE & DEPLOY SPECIFICATION (v1.0)
+======================================================================
+
+1) PURPOSE
+----------------------------------------------------------------------
+This specification defines a generic standard for packaging, validating,
+installing and deploying versioned "Release Bundles" for internal services
+(e.g., FastAPI inference services). The system is designed for intranet use
+and aims to support:
+- Versioned releases
+- Atomic deploy + rollback
+- Service management (systemd)
+- Release download/backup
+- Extensibility via project-specific validators ("plugins")
+
+This standard is project-agnostic: it must work for Valenbisi and future
+unrelated projects (other datasets, other ML models, other APIs).
+
+----------------------------------------------------------------------
+2) KEY CONCEPTS
+----------------------------------------------------------------------
+
+2.1 Release Bundle
+A Release Bundle is a single compressed file (.zip) containing:
+- Service source code (e.g., FastAPI app)
+- Assets (models, configs, dictionaries, etc.)
+- Release metadata (release.json)
+- Optional custom validator (validators/validate.py)
+
+2.2 Release Installation
+When a release is uploaded, the system:
+- Extracts it to a temporary folder
+- Validates it
+- Completes/creates release.json if needed
+- Moves it atomically into a versioned folder
+- Generates a canonical release_bundle.zip (final release artifact)
+
+2.3 Active Release (current)
+The system uses a symbolic link:
+- current -> releases/<release_name>
+The running service always uses "current" so deployment is only:
+- switch symlink + restart service
+
+2.4 Service
+A service is a runnable process managed by systemd.
+Example:
+- Uvicorn for FastAPI: uvicorn service.app:app --port 8000
+
+----------------------------------------------------------------------
+3) DIRECTORY LAYOUT (ON THE DEPLOYMENT NODE)
+----------------------------------------------------------------------
+
+Base directory (recommended):
+/opt/release_manager/
+
+Required structure:
+  /opt/release_manager/
+    releases/
+      <release_name_1>/
+      <release_name_2>/
+      ...
+    current -> /opt/release_manager/releases/<active_release>
+    runtime/
+      uploads/
+      logs/
+    venv/
+      (optional shared virtual environment)
+
+Notes:
+- The management UI must only operate inside /opt/release_manager/releases/
+- Arbitrary filesystem navigation is not allowed.
+
+----------------------------------------------------------------------
+4) RELEASE ZIP STRUCTURE (INPUT)
+----------------------------------------------------------------------
+
+A release ZIP MUST follow this structure (minimum):
+
+release.zip
+  service/
+    app.py          (or main.py; entrypoint must be defined in release.json)
+    requirements.txt   (optional but recommended)
+  assets/
+    ... any files ...
+  release.json      (optional at upload time; mandatory after installation)
+
+Optional (project-specific validator):
+  validators/
+    validate.py
+
+Allowed alternative:
+- service/main.py instead of service/app.py
+- assets can contain any nested structure required by the project
+
+----------------------------------------------------------------------
+5) release.json SPECIFICATION (v1.0)
+----------------------------------------------------------------------
+
+5.1 Overview
+release.json contains metadata required to:
+- identify the release
+- configure how to start the service
+- validate the service health
+- keep traceability (who/when)
+
+If release.json is missing or incomplete on upload, the UI must prompt the
+user to provide required fields, then create/complete release.json.
+
+5.2 Required Fields
+These fields MUST exist after installation:
+
+{
+  "release_name": "v1",
+  "project_name": "example-service",
+  "service_type": "fastapi",
+  "entrypoint": "service.app:app",
+  "api_port": 8000,
+  "created_at": "2026-01-18T12:00:00Z",
+  "created_by": "admin_user",
+  "healthcheck": {
+    "path": "/health",
+    "method": "GET"
+  }
+}
+
+Field definitions:
+- release_name: string (folder-safe: letters, numbers, underscore, dash)
+- project_name: string (logical project identifier)
+- service_type: string ("fastapi" in v1; extensible in future versions)
+- entrypoint: string in format "<module>:<object>"
+- api_port: integer (default 8000)
+- created_at: ISO8601 UTC timestamp (system-generated)
+- created_by: string (logged-in user)
+- healthcheck.path: string (endpoint path)
+- healthcheck.method: "GET" (v1)
+
+5.3 Optional Fields (Recommended)
+{
+  "description": "Human readable description",
+  "runtime": {
+    "python": "3.12",
+    "venv": true
+  },
+  "notes": "free text",
+  "tags": ["ml", "inference", "internal"],
+  "assets": {
+    "paths": ["assets/"]
+  }
+}
+
+5.4 Rules
+- release_name MUST be unique (unless overwrite is explicitly confirmed)
+- entrypoint MUST be importable by python at validation time
+- healthcheck MUST return HTTP 200 after deploy
+
+----------------------------------------------------------------------
+6) VALIDATION PIPELINE
+----------------------------------------------------------------------
+
+Validation must run BEFORE installation. If validation fails, the release
+must be marked INVALID and must not be deployable.
+
+6.1 Universal Validations (Mandatory for all projects)
+A) ZIP Structure
+- service/ directory exists
+- entrypoint file exists (as defined by entrypoint module path)
+- assets/ exists (may be empty, but recommended)
+- release.json exists OR user will provide required fields
+
+B) release.json Validation
+- JSON parse OK
+- required fields present (or collected from UI)
+- entrypoint format "<module>:<object>" valid
+
+C) Python Validation (Smoke test)
+- Compile service code:
+  python -m py_compile <entrypoint_module_file>
+- Import entrypoint:
+  python -c "from <module> import <object>"
+
+D) Dependency Validation (if requirements.txt present)
+- pip install -r service/requirements.txt into runtime environment
+  (either shared venv or per-release venv; implementation choice)
+
+6.2 Optional Project-Specific Validation (Plugin)
+If validators/validate.py exists, the system MUST run it after universal
+validation.
+
+Interface:
+- validators/validate.py must define:
+  def validate_release(release_path: str) -> dict
+
+Return format:
+{
+  "ok": true,
+  "warnings": [... optional ...],
+  "details": {... optional ...}
+}
+
+If ok=false:
+{
+  "ok": false,
+  "errors": ["..."],
+  "details": {... optional ...}
+}
+
+Notes:
+- Valenbisi validator may check models/manifest.json, load .pkl, dummy predict.
+- Other projects can implement any domain validation.
+
+----------------------------------------------------------------------
+7) INSTALLATION PROCESS (ATOMIC)
+----------------------------------------------------------------------
+
+If validation passes:
+
+Step 1: Extract to temp folder
+- runtime/uploads/tmp_<uuid>/
+
+Step 2: Ensure release.json is complete
+- If missing/incomplete, prompt user and write final release.json into temp folder.
+
+Step 3: Atomically move into releases
+- Move temp folder -> releases/<release_name>/
+- This must be a single atomic operation when possible.
+
+Step 4: Generate canonical bundle
+- Create releases/<release_name>/release_bundle.zip
+- This ZIP MUST include:
+  - service/
+  - assets/
+  - release.json (final)
+  - validators/ (if any)
+
+Step 5: Save validation report
+- releases/<release_name>/validation_report.json
+Includes:
+- universal validations results
+- plugin validation results (if any)
+- timestamps and errors
+
+----------------------------------------------------------------------
+8) RELEASE STATES (UI/CONTROL)
+----------------------------------------------------------------------
+
+Each release has one state:
+
+- VALIDATING: processing and testing ZIP
+- VALID: installed and passed validation
+- INVALID: installed but failed validation (not deployable)
+- ACTIVE: currently deployed (current -> this release)
+
+Rules:
+- Only VALID releases can be deployed.
+- ACTIVE release cannot be deleted unless undeployed first.
+
+----------------------------------------------------------------------
+9) DEPLOYMENT PROCESS
+----------------------------------------------------------------------
+
+Deploying a release means activating it for the service.
+
+Step 1: Switch current symlink
+- current -> releases/<release_name>
+
+Step 2: Restart service via systemd
+- systemctl restart <service_name>
+
+Step 3: Healthcheck validation
+- Perform HTTP request:
+  method: healthcheck.method
+  url: http://127.0.0.1:<api_port><healthcheck.path>
+- Must return status code 200.
+
+Step 4: Optional rollback policy
+If healthcheck fails, system may automatically revert current symlink to
+previous active release and restart service again.
+
+----------------------------------------------------------------------
+10) SERVICE MANAGEMENT (systemd)
+----------------------------------------------------------------------
+
+The system manages a systemd unit with:
+- WorkingDirectory = /opt/release_manager/current
+- ExecStart depends on service_type
+
+For service_type="fastapi":
+- ExecStart = <venv>/bin/uvicorn <entrypoint> --host 0.0.0.0 --port <api_port>
+
+Required operations:
+- status: systemctl status <service_name>
+- start: systemctl start <service_name>
+- stop: systemctl stop <service_name>
+- restart: systemctl restart <service_name>
+- logs: journalctl -u <service_name> -n 200
+
+Permissions:
+- UI should run as non-root
+- systemctl access should be restricted via sudoers to only this service
+
+----------------------------------------------------------------------
+11) DOWNLOAD FUNCTIONALITY
+----------------------------------------------------------------------
+
+Each release card must include a "Download" action that serves:
+- releases/<release_name>/release_bundle.zip
+
+If release_bundle.zip does not exist:
+- system MUST generate it from current release contents before download.
+
+----------------------------------------------------------------------
+12) SECURITY CONSTRAINTS (INTRANET)
+----------------------------------------------------------------------
+
+Even for intranet, these are mandatory safeguards:
+
+- UI must enforce authentication (BasicAuth via Nginx OR app login)
+- UI must restrict filesystem operations to /opt/release_manager/releases/
+- No arbitrary path traversal (deny "..", absolute paths, symlinks outside base)
+- Only validated releases can be deployed
+- Service must not run as root
+- If using pickles (.pkl), only trusted operators should upload bundles
+
+----------------------------------------------------------------------
+13) EXTENSIBILITY (FUTURE VERSIONS)
+----------------------------------------------------------------------
+
+Possible future extensions:
+- Multiple service types (batch jobs, scripts, grpc, etc.)
+- Per-release virtual environments
+- Multiple concurrent services on different ports
+- Dependency lockfiles (requirements.lock)
+- Signed bundles (integrity verification)
+- Audit trail (deploy history + user actions)
+
+----------------------------------------------------------------------
+14) COMPATIBILITY NOTES
+----------------------------------------------------------------------
+
+This spec is designed for Linux environments with:
+- Python 3.x
+- systemd
+- zip/unzip tooling
+- intranet reverse proxy (recommended: Nginx)
+
+======================================================================
+END OF SPECIFICATION
+======================================================================
