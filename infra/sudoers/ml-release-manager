@@ -1,0 +1,5 @@
+serviceuser ALL=(root) NOPASSWD: /usr/bin/systemctl start ml-release-service
+serviceuser ALL=(root) NOPASSWD: /usr/bin/systemctl stop ml-release-service
+serviceuser ALL=(root) NOPASSWD: /usr/bin/systemctl restart ml-release-service
+serviceuser ALL=(root) NOPASSWD: /usr/bin/systemctl status ml-release-service
+serviceuser ALL=(root) NOPASSWD: /usr/bin/systemctl status ml-release-service --no-pager

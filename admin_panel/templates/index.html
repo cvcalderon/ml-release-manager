@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Release Manager</title>
+  <style>
+    body { font-family: Arial; margin:0; display:flex; height:100vh; }
+    .sidebar { width:240px; background:#111; color:#fff; padding:20px; }
+    .sidebar a { color:#fff; text-decoration:none; display:block; padding:8px 0; }
+    .main { flex:1; padding:20px; background:#f4f4f4; overflow:auto; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:16px; }
+    .card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 8px rgba(0,0,0,.1); }
+    .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; }
+    .VALID { background:#d4f7d4; }
+    .INVALID { background:#ffd6d6; }
+    .ACTIVE { background:#d6e7ff; }
+    .btn { padding:8px 10px; border:0; border-radius:8px; cursor:pointer; }
+    .btn-primary { background:#1f6feb; color:#fff; }
+    .btn-danger { background:#dc2626; color:#fff; }
+    .btn-light { background:#e5e7eb; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+    input { padding:8px; width:100%; margin:6px 0; border-radius:8px; border:1px solid #ccc; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <h2>Release Manager</h2>
+    <p style="opacity:.8">Intranet</p>
+    <hr style="opacity:.2"/>
+    <a href="/admin">Releases</a>
+    <a href="/admin/service_status">Service</a>
+    <a href="/admin/logs">Logs</a>
+  </div>
+
+  <div class="main">
+    <h1>Releases</h1>
+
+    <div class="card" style="max-width:520px; margin-bottom:20px;">
+      <h3>Upload Release (.zip)</h3>
+      <form action="/admin/upload" method="post" enctype="multipart/form-data">
+        <label>Release name</label>
+        <input name="release_name" placeholder="v1" required/>
+        <label>Description</label>
+        <input name="description" placeholder="Short description"/>
+        <label>API Port</label>
+        <input name="api_port" type="number" value="8000"/>
+        <label>Created by</label>
+        <input name="created_by" value="admin"/>
+        <label>ZIP file</label>
+        <input name="file" type="file" accept=".zip" required/>
+        <button class="btn btn-primary" type="submit">Upload & Install</button>
+      </form>
+    </div>
+
+    <div class="grid">
+      {% for r in releases %}
+      <div class="card">
+        <h3>{{ r.name }}</h3>
+        <span class="badge {{ r.status }}">{{ r.status }}</span>
+        <p style="margin-top:10px; color:#444;">
+          {{ r.meta.get("description","") }}
+        </p>
+
+        <div class="row">
+          <form action="/admin/deploy/{{ r.name }}" method="post">
+            <button class="btn btn-primary" type="submit" {% if r.status == "INVALID" %}disabled{% endif %}>
+            Deploy
+            </button>
+        </form>
+
+        {% if r.status == "ACTIVE" %}
+        <form action="/admin/deactivate" method="post">
+            <button class="btn btn-danger" type="submit">
+            Stop / Deactivate
+            </button>
+        </form>
+        {% endif %}
+
+        <a class="btn btn-light" href="/admin/download/{{ r.name }}">Download</a>
+
+        <form action="/admin/delete/{{ r.name }}" method="post">
+            <button class="btn btn-danger" type="submit" {% if r.status == "ACTIVE" %}disabled{% endif %}>
+            Delete
+            </button>
+        </form>
+      </div>
+
+
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</body>
+</html>
