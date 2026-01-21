@@ -14,12 +14,17 @@ A generic internal release and deployment manager for versioned service bundles.
 - View service status and logs
 
 ## Components
-- `admin_panel/` : Admin web panel (FastAPI + HTML)
-- `scripts/`     : Installation and deployment scripts
-- `systemd/`     : systemd unit templates
-- `nginx/`       : nginx reverse proxy templates
-- `docs/`        : specs and documentation
-- `examples/`    : example release bundle structure
+- admin_panel/ : Admin web panel (FastAPI + HTML)
+- scripts/ : Installation and deployment scripts
+- systemd/ : systemd unit templates
+- nginx/ : nginx reverse proxy templates
+- infra/ : live CT configuration snapshots (systemd/nginx/sudoers)
+- docs/ : specs and documentation
+- examples/ : example release bundle structure
+
+## Notes
+- `nginx/` and `systemd/` contain generic reusable templates.
+- `infra/` contains live snapshots copied from a working CT instance.
 
 ## Deployment model
 - Only intranet usage
