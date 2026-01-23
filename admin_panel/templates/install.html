@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<div class="card">
+  <h3 style="margin-top:0;">Upload & Install</h3>
+  <form action="/admin/upload" method="post" enctype="multipart/form-data" class="row">
+    <input type="text" name="release_name" placeholder="release name (e.g. example_v1)" required />
+    <input type="file" name="file" accept=".zip" required />
+    <button class="btn btn-primary" type="submit">Install</button>
+  </form>
+  <div class="muted" style="margin-top:8px;">
+    Upload a single ZIP bundle. The system will validate and install it under <code>/opt/release_manager/releases/&lt;name&gt;</code>.
+  </div>
+</div>
+
+<div style="height:14px;"></div>
+
+<div class="grid">
+  {% for r in releases %}
+  <div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <div>
+        <div style="font-weight:700; font-size:16px;">{{ r.name }}</div>
+        <div class="muted">{{ r.description or "No description" }}</div>
+      </div>
+
+      <div class="row">
+        {% if r.status == "ACTIVE" %}
+          <span class="pill pill-ok">ACTIVE</span>
+        {% elif r.status == "VALID" %}
+          <span class="pill pill-ok">VALID</span>
+        {% elif r.status == "NOT_VALIDATED" %}
+          <span class="pill pill-warn">NOT VALIDATED</span>
+        {% else %}
+          <span class="pill pill-bad">{{ r.status }}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div style="height:10px;"></div>
+
+    <div class="row">
+      <!-- Activate -->
+      <form action="/admin/deploy/{{ r.name }}" method="post">
+        <button class="btn btn-primary" type="submit" {% if r.status == "INVALID" %}disabled{% endif %}>
+          Activate
+        </button>
+      </form>
+
+      <!-- Stop / Deactivate -->
+      {% if r.status == "ACTIVE" %}
+      <form action="/admin/deactivate" method="post">
+        <button class="btn btn-danger" type="submit">Stop / Deactivate</button>
+      </form>
+      {% endif %}
+
+      <!-- Download -->
+      <a class="btn btn-muted" href="/admin/download/{{ r.name }}">Download</a>
+
+      <!-- Delete -->
+      <form action="/admin/delete/{{ r.name }}" method="post">
+        <button class="btn btn-danger" type="submit" {% if r.status == "ACTIVE" %}disabled{% endif %}>
+          Delete
+        </button>
+      </form>
+
+      <!-- Details -->
+      <a class="btn" href="/admin/release/{{ r.name }}">Open</a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% endblock %}

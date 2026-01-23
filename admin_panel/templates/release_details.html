@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Release Details - {{ name }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    pre { background: #f4f4f4; padding: 12px; border-radius: 8px; overflow-x:auto; }
+    .pill { display:inline-block; padding:6px 10px; border-radius: 999px; font-size: 12px; }
+    .ok { background:#d1fae5; }
+    .bad { background:#fee2e2; }
+    .muted { color:#666; }
+    a { text-decoration:none; }
+    .btn { display:inline-block; padding:8px 12px; border-radius: 8px; border:1px solid #ddd; margin-right:8px; }
+  </style>
+</head>
+<body>
+
+  <h2>Release: {{ name }}</h2>
+
+  <div>
+    {% if active %}
+      <span class="pill ok">ACTIVE</span>
+    {% else %}
+      <span class="pill bad">NOT ACTIVE</span>
+    {% endif %}
+  </div>
+
+  <p class="muted">
+    <a class="btn" href="/admin/">← Back</a>
+    <a class="btn" href="/admin/service_status">Service Status</a>
+    <a class="btn" href="/admin/service_logs">Service Logs</a>
+  </p>
+
+  <h3>release.json</h3>
+  <pre>{{ release_json | tojson(indent=2) }}</pre>
+
+  <h3>validation_report.json</h3>
+  <pre>{{ validation_json | tojson(indent=2) }}</pre>
+
+  <h3>Folder tree (depth <= 3)</h3>
+  <pre>{% for line in tree %}{{ line }}
+{% endfor %}</pre>
+
+</body>
+</html>

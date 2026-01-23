@@ -76,6 +76,8 @@
         </form>
         {% endif %}
 
+        <a class="btn btn-light" href="/admin/release/{{ r.name }}">Details</a>
+
         <a class="btn btn-light" href="/admin/download/{{ r.name }}">Download</a>
 
         <form action="/admin/delete/{{ r.name }}" method="post">
