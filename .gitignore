@@ -47,3 +47,8 @@ releases/
 
 !infra/systemd/*.service
 !infra/systemd/*.live.service
+
+*.save
+*.swp
+*.swo
+*~
