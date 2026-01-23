@@ -44,3 +44,6 @@ releases/
 
 # Nginx / systemd generated files
 *.service
+
+!infra/systemd/*.service
+!infra/systemd/*.live.service

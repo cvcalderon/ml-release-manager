@@ -1,0 +1,13 @@
+[Unit]
+Description=ML Release Manager - Admin Panel
+After=network.target
+
+[Service]
+User=serviceuser
+WorkingDirectory=/home/serviceuser/ml-release-manager
+ExecStart=/opt/release_manager/venv/bin/uvicorn admin_panel.app.main:app --host 127.0.0.1 --port 9000
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
