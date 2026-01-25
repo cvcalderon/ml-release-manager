@@ -22,6 +22,7 @@ import re
 import sys
 import json
 import time
+import importlib.metadata
 import urllib.request
 import shutil
 import subprocess
@@ -200,7 +201,8 @@ def upload_release(
     shutil.move(str(tmp_dir), str(dest))
 
     #write_validation_report(dest, ok, errors, details)
-    write_validation_report(dest, ok, {"errors": errors, **details})
+    #write_validation_report(dest, ok, {"errors": errors, **details})
+    validate_release(dest)
     build_canonical_zip(dest)
 
     # cleanup upload zip
@@ -632,6 +634,14 @@ def validate_release(release_path: Path) -> tuple[bool, str]:
     - python -m py_compile service/app.py
     - import service.app
     """
+    # 0) Dependency check (optional)
+    pip_reqs = get_release_pip_requirements(release_path)
+    missing = check_missing_dependencies(pip_reqs)
+    if missing:
+        msg = f"Missing dependencies: {', '.join(missing)}"
+        write_validation_report(release_path, False, {"errors": [msg]})
+        return False, msg
+
     errors = []
 
     app_py = release_path / "service" / "app.py"
@@ -672,3 +682,62 @@ def next_copy_name(base_name: str) -> str:
                 if m:
                     max_n = max(max_n, int(m.group(1)))
     return f"{prefix}{max_n+1:03d}"
+
+def _normalize_pkg_name(req: str) -> str:
+    """
+    Extracts a base package name from a pip requirement string.
+    Examples:
+      'uvicorn[standard]>=0.23' -> 'uvicorn'
+      'lightgbm==4.3.0' -> 'lightgbm'
+      'pydantic' -> 'pydantic'
+    """
+    s = req.strip()
+    # remove version operators
+    s = re.split(r"(==|>=|<=|~=|!=|>|<)", s)[0]
+    # remove extras: package[extra]
+    s = s.split("[")[0]
+    return s.strip().lower()
+
+def get_release_pip_requirements(release_path: Path) -> list[str]:
+    rj_path = release_path / "release.json"
+    if not rj_path.exists():
+        return []
+    try:
+        rj = json.loads(rj_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    deps = rj.get("dependencies", {})
+    pip_reqs = deps.get("pip", [])
+    if isinstance(pip_reqs, list):
+        return [str(x).strip() for x in pip_reqs if str(x).strip()]
+    return []
+
+def check_missing_dependencies(pip_requirements: list[str]) -> list[str]:
+    """
+    Returns a list of missing package names based on importlib.metadata.
+    (MVP check: presence only, not version constraint enforcement.)
+    """
+    if not pip_requirements:
+        return []
+
+    # Build installed distribution names (normalized)
+    installed = set()
+    for dist in importlib.metadata.distributions():
+        name = dist.metadata.get("Name")
+        if name:
+            installed.add(name.strip().lower())
+
+    missing = []
+    for req in pip_requirements:
+        pkg = _normalize_pkg_name(req)
+        if pkg and pkg not in installed:
+            missing.append(pkg)
+
+    # unique but stable order
+    seen = set()
+    ordered = []
+    for x in missing:
+        if x not in seen:
+            seen.add(x)
+            ordered.append(x)
+    return ordered
