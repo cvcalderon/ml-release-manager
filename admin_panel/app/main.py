@@ -154,11 +154,11 @@ def upload_release(
 ):
     rname = safe_name(release_name)
     if not rname:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/admin/install", status_code=303)
 
     if (RELEASES / rname).exists():
         # refuse overwrite for MVP
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/admin/install", status_code=303)
 
     UPLOADS.mkdir(parents=True, exist_ok=True)
     tmp_id = uuid.uuid4().hex
@@ -176,39 +176,29 @@ def upload_release(
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         zip_path.unlink(missing_ok=True)
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/admin/install", status_code=303)
 
+    # validate structure (MVP: even invalid releases are installed for debugging)
     ok, errors = validate_zip_structure(tmp_dir)
 
     # ensure release.json created/filled
-    meta = ensure_release_json(tmp_dir, rname, description, created_by, api_port)
+    ensure_release_json(tmp_dir, rname, description, created_by, api_port)
 
-    # basic import test (universal validation)
-    details = {"release.json": meta}
-    if ok:
-        # compile + import entrypoint
-        # expects: service/app.py and entrypoint service.app:app
-        rc1, out1 = run([str(VENV), "-m", "py_compile", "service/app.py"], cwd=tmp_dir)
-        rc2, out2 = run([str(VENV), "-c", "from service.app import app"], cwd=tmp_dir)
-        details["py_compile"] = out1
-        details["import_test"] = out2
-        if rc1 != 0 or rc2 != 0:
-            ok = False
-            errors.append("Python compile/import validation failed")
-
-    # install release (even if invalid -> keep for debugging)
+    # install release
     dest = RELEASES / rname
     shutil.move(str(tmp_dir), str(dest))
 
-    #write_validation_report(dest, ok, errors, details)
-    #write_validation_report(dest, ok, {"errors": errors, **details})
+    # unified validation (structure + deps + compile/import)
     validate_release(dest)
+
+    # build canonical zip
     build_canonical_zip(dest)
 
     # cleanup upload zip
     zip_path.unlink(missing_ok=True)
 
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url="/admin/install", status_code=303)
+
 
 @app.post("/admin/deploy/{release_name}")
 def deploy_release(release_name: str):
