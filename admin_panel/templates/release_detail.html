@@ -24,9 +24,9 @@
     <div class="row">
       <!-- Activate -->
       <form action="/admin/deploy/{{ r.name }}" method="post">
-        <button class="btn btn-primary" type="submit" {% if r.status == "INVALID" %}disabled{% endif %}>
+         <button class="btn btn-primary" type="submit" {% if r.status != "VALID" %}disabled{% endif %}>
           Activate
-        </button>
+         </button>
       </form>
 
       <!-- Stop -->
@@ -51,6 +51,14 @@
         </button>
       </form>
     </div>
+
+    {% if r.status == "NOT_VALIDATED" %}
+    <div class="muted" style="margin-top:10px;">
+      This release is <b>NOT VALIDATED</b>. Activate is disabled.
+      Please use <b>Update & Validate</b> or <b>Clone & Edit</b>.
+    </div>
+    {% endif %}
+
   </div>
 </div>
 

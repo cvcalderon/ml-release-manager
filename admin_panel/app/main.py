@@ -138,15 +138,10 @@ def build_canonical_zip(release_dir: Path):
 def root():
     return RedirectResponse(url="/admin/", status_code=302)
 
+@app.get("/admin")
 @app.get("/admin/")
 def admin_root():
     return RedirectResponse(url="/admin/install", status_code=303)
-
-
-@app.get("/admin", response_class=HTMLResponse)
-def home(request: Request):
-    releases = list_releases()
-    return templates.TemplateResponse("index.html", {"request": request, "releases": releases})
 
 @app.post("/admin/upload")
 def upload_release(
@@ -204,7 +199,8 @@ def upload_release(
     dest = RELEASES / rname
     shutil.move(str(tmp_dir), str(dest))
 
-    write_validation_report(dest, ok, errors, details)
+    #write_validation_report(dest, ok, errors, details)
+    write_validation_report(dest, ok, {"errors": errors, **details})
     build_canonical_zip(dest)
 
     # cleanup upload zip
@@ -214,10 +210,27 @@ def upload_release(
 
 @app.post("/admin/deploy/{release_name}")
 def deploy_release(release_name: str):
+
     rname = safe_name(release_name)
     target = RELEASES / rname
     if not target.exists():
         return RedirectResponse(url="/admin", status_code=303)
+
+    # --- BLOCK DEPLOY IF NOT VALID ---
+    vpath = target / "validation_report.json"
+    is_valid = False
+
+    if vpath.exists():
+        try:
+            vj = json.loads(vpath.read_text(encoding="utf-8"))
+            is_valid = (vj.get("ok") is True)
+        except Exception:
+            is_valid = False
+
+    if not is_valid:
+        # Redirect to release detail (user must validate first)
+        return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
+
 
     # 1) Remember previous active release (if any)
     prev_target = None
@@ -318,16 +331,6 @@ def delete_release(release_name: str):
 
     shutil.rmtree(target, ignore_errors=True)
     return RedirectResponse(url="/admin", status_code=303)
-
-@app.get("/admin/service_status", response_class=HTMLResponse)
-def service_status(request: Request):
-    rc, out = run(["systemctl", "status", SERVICE_NAME, "--no-pager"])
-    return templates.TemplateResponse("service.html", {"request": request, "status": out})
-
-@app.get("/admin/logs", response_class=HTMLResponse)
-def logs(request: Request):
-    rc, out = run(["journalctl", "-u", SERVICE_NAME, "-n", "200", "--no-pager"])
-    return templates.TemplateResponse("logs.html", {"request": request, "logs": out})
 
 @app.get("/admin/release/{release_name}")
 def release_detail_page(release_name: str, request: Request):
@@ -449,28 +452,6 @@ def update_main(release_name: str, content: str = Form(...)):
     return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
 
 
-@app.post("/admin/release/{release_name}/update_main")
-def update_main(release_name: str, content: str = Form(...)):
-    rname = safe_name(release_name)
-    target = RELEASES / rname
-    if not target.exists():
-        return RedirectResponse(url="/admin/releases", status_code=303)
-
-    # block update if ACTIVE
-    if CURRENT.exists():
-        try:
-            if CURRENT.resolve() == target.resolve():
-                return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
-        except Exception:
-            pass
-
-    main_path = target / "service" / "app.py"
-    main_path.write_text(content, encoding="utf-8")
-
-    validate_release(target)
-    return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
-
-
 @app.post("/admin/release/{release_name}/update_release_json")
 def update_release_json(release_name: str, content: str = Form(...)):
     rname = safe_name(release_name)
@@ -498,22 +479,6 @@ def update_release_json(release_name: str, content: str = Form(...)):
     validate_release(target)
     return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
 
-
-@app.get("/admin/service_status")
-def service_status(request: Request):
-    txt = service_status_text()
-    return templates.TemplateResponse(
-        "service_status.html",
-        {"request": request, "status_text": txt},
-    )
-
-@app.get("/admin/service_logs")
-def service_logs(request: Request):
-    txt = service_logs_text()
-    return templates.TemplateResponse(
-        "service_logs.html",
-        {"request": request, "logs_text": txt},
-    )
 
 @app.get("/admin/install")
 def install_page(request: Request):

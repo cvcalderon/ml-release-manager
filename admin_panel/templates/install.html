@@ -42,9 +42,9 @@
     <div class="row">
       <!-- Activate -->
       <form action="/admin/deploy/{{ r.name }}" method="post">
-        <button class="btn btn-primary" type="submit" {% if r.status == "INVALID" %}disabled{% endif %}>
-          Activate
-        </button>
+         <button class="btn btn-primary" type="submit" {% if r.status != "VALID" %}disabled{% endif %}>
+         Activate
+         </button>
       </form>
 
       <!-- Stop / Deactivate -->
@@ -67,6 +67,13 @@
       <!-- Details -->
       <a class="btn" href="/admin/release/{{ r.name }}">Open</a>
     </div>
+    
+    {% if r.status == "NOT_VALIDATED" %}
+      <div class="muted" style="margin-top:8px;">
+        Activate is disabled until this release is validated. Open it and click <b>Update & Validate</b>.
+      </div>
+    {% endif %}
+
   </div>
   {% endfor %}
 </div>
