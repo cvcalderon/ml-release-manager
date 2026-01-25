@@ -105,6 +105,35 @@
   </div>
 </div>
 
+
+<div style="height:14px;"></div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Last Validation Result</h3>
+
+  {% if validation_summary.exists %}
+    {% if validation_summary.ok %}
+      <div class="pill pill-ok">VALID</div>
+    {% else %}
+      <div class="pill pill-warn">NOT VALIDATED</div>
+    {% endif %}
+
+    <div class="muted" style="margin-top:8px;">
+      <b>Timestamp:</b> {{ validation_summary.timestamp or "unknown" }}
+    </div>
+
+    <div style="margin-top:10px;">
+      <pre style="margin:0;">{{ validation_summary.message }}</pre>
+    </div>
+  {% else %}
+    <div class="pill pill-warn">NOT VALIDATED</div>
+    <div class="muted" style="margin-top:8px;">
+      {{ validation_summary.message }}
+    </div>
+  {% endif %}
+</div>
+
+
 <div style="height:14px;"></div>
 
 <div class="card">

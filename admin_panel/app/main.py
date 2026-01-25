@@ -386,6 +386,40 @@ def release_detail_page(release_name: str, request: Request):
     if active:
         status = "ACTIVE"
 
+    # --- validation summary (for UI) ---
+    validation_summary = {
+        "exists": False,
+        "ok": None,
+        "timestamp": None,
+        "message": "No validation report found yet.",
+    }
+
+    if vpath.exists():
+        validation_summary["exists"] = True
+        try:
+            vj = json.loads(vpath.read_text(encoding="utf-8"))
+            ok = (vj.get("ok") is True)
+            validation_summary["ok"] = ok
+            validation_summary["timestamp"] = vj.get("timestamp_utc")
+
+            # Compact message: errors > output > fallback
+            if not ok:
+                errs = vj.get("errors")
+                if isinstance(errs, list) and len(errs) > 0:
+                    validation_summary["message"] = " | ".join(str(x) for x in errs[:3])
+                else:
+                    out = vj.get("output")
+                    if isinstance(out, str) and out.strip():
+                        validation_summary["message"] = out.strip().splitlines()[-1][:160]
+                    else:
+                        validation_summary["message"] = "Validation failed (no details)."
+            else:
+                validation_summary["message"] = "Validation OK."
+        except Exception:
+            validation_summary["ok"] = False
+            validation_summary["message"] = "Validation report exists but could not be parsed."
+
+
     # read main "service/app.py"
     main_path = target / "service" / "app.py"
     main_py = main_path.read_text(encoding="utf-8") if main_path.exists() else ""
@@ -409,6 +443,7 @@ def release_detail_page(release_name: str, request: Request):
             "service_status": service_status,
             "service_logs": service_logs,
             "api_url": api_url,
+            "validation_summary": validation_summary,
         },
     )
 
