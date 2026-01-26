@@ -29,6 +29,7 @@ import subprocess
 import uuid
 import zipfile
 import os
+import threading
 from datetime import datetime, timezone
 
 BASE = Path("/opt/release_manager")
@@ -41,6 +42,9 @@ SERVICE_PORT = 8000
 DEFAULT_HEALTH_PATH = "/health"
 HEALTH_TIMEOUT_SEC = 8
 
+RUNTIME_BASE_DEPS = {
+    "fastapi": ["fastapi", "uvicorn"],
+}
 
 app = FastAPI(title="Release Manager - Admin")
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
@@ -90,14 +94,6 @@ def validate_zip_structure(tmp_dir: Path) -> tuple[bool, list[str]]:
     # release.json optional at upload time
     return (len(errors) == 0, errors)
 
-def write_validation_report(dest: Path, ok: bool, errors: list[str], details: dict):
-    report = {
-        "ok": ok,
-        "errors": errors,
-        "details": details,
-        "validated_at": datetime.now(timezone.utc).isoformat()
-    }
-    (dest / "validation_report.json").write_text(json.dumps(report, indent=2))
 
 def ensure_release_json(tmp_dir: Path, release_name: str, description: str, created_by: str, api_port: int):
     p = tmp_dir / "release.json"
@@ -208,7 +204,10 @@ def deploy_release(release_name: str):
     if not target.exists():
         return RedirectResponse(url="/admin", status_code=303)
 
-    # --- BLOCK DEPLOY IF NOT VALID ---
+    # ✅ Ensure /opt/release_manager exists (parent of CURRENT)
+    CURRENT.parent.mkdir(parents=True, exist_ok=True)
+
+    # ✅ BLOCK deploy if release is not VALID (must be validated first)
     vpath = target / "validation_report.json"
     is_valid = False
 
@@ -220,9 +219,40 @@ def deploy_release(release_name: str):
             is_valid = False
 
     if not is_valid:
-        # Redirect to release detail (user must validate first)
         return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
 
+    # ✅ EXTRA GUARD 1: block if per-release venv missing (runtime would crash)
+    venv_py = target / ".venv" / "bin" / "python"
+    if not venv_py.exists():
+        (RUNTIME / "logs").mkdir(parents=True, exist_ok=True)
+        (RUNTIME / "logs" / "last_deploy_error.txt").write_text(
+            f"Deploy blocked: missing per-release venv for release={rname}\n",
+            encoding="utf-8"
+        )
+        return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
+
+    # ✅ EXTRA GUARD 2: block if missing deps in release venv
+    # Requires Fix2+Fix3 helpers:
+    # - get_required_pip_requirements()
+    # - check_missing_in_release_venv()
+    try:
+        required = get_required_pip_requirements(target)
+        missing = check_missing_in_release_venv(target, required)
+    except Exception as e:
+        (RUNTIME / "logs").mkdir(parents=True, exist_ok=True)
+        (RUNTIME / "logs" / "last_deploy_error.txt").write_text(
+            f"Deploy blocked: dependency check error for release={rname}\nerror={str(e)}\n",
+            encoding="utf-8"
+        )
+        return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
+
+    if missing:
+        (RUNTIME / "logs").mkdir(parents=True, exist_ok=True)
+        (RUNTIME / "logs" / "last_deploy_error.txt").write_text(
+            f"Deploy blocked: missing dependencies for release={rname}: {', '.join(missing)}\n",
+            encoding="utf-8"
+        )
+        return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
 
     # 1) Remember previous active release (if any)
     prev_target = None
@@ -258,25 +288,29 @@ def deploy_release(release_name: str):
 
         # 6) Rollback if failed
         if not ok:
-            # restore previous
             if prev_target and prev_target.exists():
                 if CURRENT.exists() or CURRENT.is_symlink():
                     if CURRENT.is_dir() and not CURRENT.is_symlink():
                         shutil.rmtree(CURRENT)
                     else:
                         CURRENT.unlink(missing_ok=True)
+
                 CURRENT.symlink_to(prev_target)
                 run(["sudo", "systemctl", "restart", SERVICE_NAME])
 
-            # Optional: store last deploy error (simple file)
             (RUNTIME / "logs").mkdir(parents=True, exist_ok=True)
             (RUNTIME / "logs" / "last_deploy_error.txt").write_text(
                 f"Deploy failed for release={rname}\nhealth_path={health_path}\nerror={last_msg}\n",
                 encoding="utf-8"
             )
 
-    except Exception:
-        return RedirectResponse(url="/admin", status_code=303)
+    except Exception as e:
+        (RUNTIME / "logs").mkdir(parents=True, exist_ok=True)
+        (RUNTIME / "logs" / "last_deploy_error.txt").write_text(
+            f"Deploy exception for release={rname}\nerror={str(e)}\n",
+            encoding="utf-8"
+        )
+        return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
 
     return RedirectResponse(url="/admin", status_code=303)
 
@@ -537,6 +571,42 @@ def releases_page(request: Request):
         },
     )
 
+@app.post("/admin/release/{release_name}/install_missing_deps")
+def install_missing_deps(release_name: str):
+    rname = safe_name(release_name)
+    target = RELEASES / rname
+    if not target.exists():
+        return RedirectResponse(url="/admin/install", status_code=303)
+
+    # safety: do not modify deps while ACTIVE
+    if CURRENT.exists():
+        try:
+            if CURRENT.resolve() == target.resolve():
+                return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
+        except Exception:
+            pass
+
+    # start background thread (simple MVP)
+    def _worker():
+        ok, out = install_missing_deps_with_progress(target)
+        if not ok:
+            # keep pip output in validation report for visibility
+            write_validation_report(target, False, {"errors": ["Dependency installation failed"], "pip_output": out[-1200:]})
+        # re-validate after install attempt
+        validate_release(target)
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return RedirectResponse(url=f"/admin/release/{rname}", status_code=303)
+
+
+@app.get("/admin/release/{release_name}/deps_status")
+def deps_status(release_name: str):
+    rname = safe_name(release_name)
+    target = RELEASES / rname
+    if not target.exists():
+        return {"status": "missing", "progress": 0, "message": "Release not found"}
+    return read_deps_progress(target)
+
 
 
 # Helpers
@@ -617,25 +687,66 @@ def write_validation_report(release_path: Path, ok: bool, detail: dict) -> None:
         encoding="utf-8",
     )
 
+def check_missing_in_release_venv(release_path: Path, pip_requirements: list[str]) -> list[str]:
+    """
+    Returns missing requirements *as requirement strings* (not only names).
+    Compares canonical names vs installed distributions.
+    """
+    if not pip_requirements:
+        return []
+
+    py = release_venv_python(release_path)
+    if not py.exists():
+        # if venv doesn't exist, everything is missing
+        return pip_requirements[:]  # keep full req strings
+
+    # Ask the venv python what distributions exist
+    cmd = (
+        "import importlib.metadata as m;"
+        "print('\\n'.join([(d.metadata.get('Name') or '').strip() for d in m.distributions()]))"
+    )
+    rc, out = run([str(py), "-c", cmd])
+    if rc != 0:
+        return pip_requirements[:]
+
+    installed = set()
+    for line in out.splitlines():
+        name = line.strip()
+        if name:
+            installed.add(canonicalize_name(name))
+
+    missing = []
+    for req in pip_requirements:
+        pkg = req_to_pkg(req)
+        if pkg and pkg not in installed:
+            missing.append(req)  # keep original req string
+
+    # unique ordered
+    seen = set()
+    ordered = []
+    for r in missing:
+        if r not in seen:
+            seen.add(r)
+            ordered.append(r)
+    return ordered
+
+
 def validate_release(release_path: Path) -> tuple[bool, str]:
     """
-    Validates a release after updates:
-    - checks service/app.py exists
-    - python -m py_compile service/app.py
-    - import service.app
+    Validates a release (per-release venv):
+    - checks service/app.py + service/__init__.py exist
+    - ensures <release>/.venv exists (fast)
+    - checks missing deps in that venv (does NOT install)
+    - if deps missing -> NOT_VALIDATED
+    - if deps OK -> compile/import using release venv
     """
-    # 0) Dependency check (optional)
-    pip_reqs = get_release_pip_requirements(release_path)
-    missing = check_missing_dependencies(pip_reqs)
-    if missing:
-        msg = f"Missing dependencies: {', '.join(missing)}"
-        write_validation_report(release_path, False, {"errors": [msg]})
-        return False, msg
+    errors: list[str] = []
+    details: dict = {}
 
-    errors = []
-
+    # 1) Required files
     app_py = release_path / "service" / "app.py"
     init_py = release_path / "service" / "__init__.py"
+
     if not init_py.exists():
         errors.append("Missing service/__init__.py")
     if not app_py.exists():
@@ -645,22 +756,52 @@ def validate_release(release_path: Path) -> tuple[bool, str]:
         write_validation_report(release_path, False, {"errors": errors})
         return False, "\n".join(errors)
 
-    py = sys.executable  # uses the venv python running the admin panel
+    # 2) Ensure per-release venv exists (no deps install here)
+    ok_venv, out_venv = ensure_release_venv(release_path)
+    details["venv"] = out_venv
+    if not ok_venv:
+        errors.append("Failed to create per-release venv")
+        write_validation_report(release_path, False, {"errors": errors, **details})
+        return False, "venv create failed"
 
-    # 1) compile
-    rc1, out1 = run([py, "-m", "py_compile", "service/app.py"], cwd=str(release_path))
+    py = release_venv_python(release_path)
+    if not py.exists():
+        errors.append("Release venv python not found")
+        write_validation_report(release_path, False, {"errors": errors, **details})
+        return False, "venv python missing"
+
+    # 3) Dependency check (no install)
+    #pip_reqs = get_release_pip_requirements(release_path)
+    pip_reqs = get_required_pip_requirements(release_path)
+    details["pip_requirements"] = pip_reqs
+
+    missing = check_missing_in_release_venv(release_path, pip_reqs)
+    details["missing_deps"] = missing
+    if missing:
+        msg = f"Missing dependencies ({len(missing)}): {', '.join(missing)}"
+        write_validation_report(release_path, False, {"errors": [msg], **details})
+        return False, msg
+
+    # 4) Compile inside per-release venv
+    rc1, out1 = run([str(py), "-m", "py_compile", "service/app.py"], cwd=str(release_path))
+    details["py_compile"] = (out1 or "")[-1200:]
     if rc1 != 0:
-        write_validation_report(release_path, False, {"errors": ["py_compile failed"], "output": out1})
+        errors.append("py_compile failed")
+        write_validation_report(release_path, False, {"errors": errors, **details})
         return False, out1
 
-    # 2) import
-    rc2, out2 = run([py, "-c", "import service.app"], cwd=str(release_path))
+    # 5) Import inside per-release venv
+    rc2, out2 = run([str(py), "-c", "import service.app"], cwd=str(release_path))
+    details["import_test"] = (out2 or "")[-1200:]
     if rc2 != 0:
-        write_validation_report(release_path, False, {"errors": ["import service.app failed"], "output": out2})
+        errors.append("import service.app failed")
+        write_validation_report(release_path, False, {"errors": errors, **details})
         return False, out2
 
-    write_validation_report(release_path, True, {"output": out1 + "\n" + out2})
+    # ✅ Success
+    write_validation_report(release_path, True, {"errors": [], **details})
     return True, "OK"
+
 
 def next_copy_name(base_name: str) -> str:
     prefix = f"{base_name}_copy_"
@@ -731,3 +872,153 @@ def check_missing_dependencies(pip_requirements: list[str]) -> list[str]:
             seen.add(x)
             ordered.append(x)
     return ordered
+
+def release_venv_python(release_path: Path) -> Path:
+    return release_path / ".venv" / "bin" / "python"
+
+
+def ensure_release_venv(release_path: Path) -> tuple[bool, str]:
+    """
+    Ensure a per-release venv exists at <release_path>/.venv
+    Returns (ok, output).
+    """
+    py = release_venv_python(release_path)
+
+    # already exists
+    if py.exists():
+        return True, "venv exists"
+
+    # create venv
+    rc, out = run(["python3", "-m", "venv", str(release_path / ".venv")])
+    if rc != 0:
+        return False, out
+
+    # upgrade pip tooling (recommended)
+    rc2, out2 = run([str(py), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    if rc2 != 0:
+        return False, out + "\n" + out2
+
+    return True, out2
+
+def pip_install_in_release_venv(release_path: Path, pip_requirements: list[str]) -> tuple[bool, str]:
+    """
+    Install pip requirements inside the per-release venv.
+    """
+    if not pip_requirements:
+        return True, "no dependencies"
+
+    py = release_venv_python(release_path)
+    cmd = [str(py), "-m", "pip", "install"] + pip_requirements
+    rc, out = run(cmd)
+    return (rc == 0), out
+
+
+def install_missing_deps_with_progress(release_path: Path) -> tuple[bool, str]:
+    # ✅ Ensure per-release venv exists first
+    ok_venv, msg_venv = ensure_release_venv(release_path)
+    if not ok_venv:
+        write_deps_progress(release_path, {"status": "error", "progress": 0, "message": f"Venv error: {msg_venv}"})
+        return False, msg_venv
+
+    pip_reqs = get_required_pip_requirements(release_path)
+    missing = check_missing_in_release_venv(release_path, pip_reqs)
+
+    if not missing:
+        write_deps_progress(release_path, {"status": "done", "progress": 100, "message": "No missing dependencies"})
+        return True, "No missing dependencies"
+
+    total = len(missing)
+    ok_all = True
+    combined_out = ""
+
+    write_deps_progress(release_path, {"status": "running", "progress": 0, "message": f"Installing {total} packages..."})
+
+    py = release_venv_python(release_path)
+
+    for i, req in enumerate(missing, start=1):
+        pct = int((i / total) * 100)
+        write_deps_progress(
+            release_path,
+            {"status": "running", "progress": pct, "message": f"Installing {req} ({i}/{total})..."}
+        )
+
+        rc, out = run([str(py), "-m", "pip", "install", req], cwd=str(release_path))
+        combined_out += f"\n--- {req} ---\n{out}\n"
+
+        if rc != 0:
+            ok_all = False
+            write_deps_progress(
+                release_path,
+                {"status": "error", "progress": pct, "message": f"Failed installing {req}"}
+            )
+            break
+
+    if ok_all:
+        write_deps_progress(release_path, {"status": "done", "progress": 100, "message": "Dependencies installed"})
+        return True, combined_out
+
+    return False, combined_out
+
+
+def deps_progress_path(release_path: Path) -> Path:
+    return release_path / ".deps_install_progress.json"
+
+
+def write_deps_progress(release_path: Path, data: dict) -> None:
+    deps_progress_path(release_path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def read_deps_progress(release_path: Path) -> dict:
+    p = deps_progress_path(release_path)
+    if not p.exists():
+        return {"status": "idle", "progress": 0, "message": ""}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {"status": "idle", "progress": 0, "message": ""}
+
+
+def get_release_service_type(release_path: Path) -> str:
+    rj = release_path / "release.json"
+    if not rj.exists():
+        return "fastapi"
+    try:
+        data = json.loads(rj.read_text(encoding="utf-8"))
+        return (data.get("service_type") or "fastapi").lower()
+    except Exception:
+        return "fastapi"
+
+def get_required_pip_requirements(release_path: Path) -> list[str]:
+    service_type = get_release_service_type(release_path)
+    base = RUNTIME_BASE_DEPS.get(service_type, [])
+    user = get_release_pip_requirements(release_path)  # tu función actual
+    return base + user
+
+def get_release_python(release_path: Path) -> Path:
+    return release_path / ".venv" / "bin" / "python"
+
+
+from packaging.utils import canonicalize_name
+from packaging.requirements import Requirement
+
+def req_to_pkg(req: str) -> str:
+    """
+    Extract canonical package name from a requirement string.
+    Handles versions and extras: uvicorn[standard]>=0.25 -> uvicorn
+    """
+    try:
+        r = Requirement(req)
+        return canonicalize_name(r.name)
+    except Exception:
+        # Fallback simple
+        x = req.strip()
+        if not x:
+            return ""
+        # strip version constraints
+        for sep in ["==", ">=", "<=", ">", "<", "~=", "!="]:
+            if sep in x:
+                x = x.split(sep, 1)[0].strip()
+        # strip extras
+        if "[" in x:
+            x = x.split("[", 1)[0].strip()
+        return canonicalize_name(x)

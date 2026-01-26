@@ -29,6 +29,15 @@
          </button>
       </form>
 
+      {% if r.status == "NOT_VALIDATED" %}
+      <form action="/admin/release/{{ r.name }}/install_missing_deps" method="post">
+        <button class="btn btn-muted" id="depsBtn" type="submit">
+          Install missing deps
+        </button>
+      </form>
+      {% endif %}
+
+
       <!-- Stop -->
       {% if r.status == "ACTIVE" %}
       <form action="/admin/deactivate" method="post">
@@ -142,3 +151,38 @@
 </div>
 
 {% endblock %}
+
+
+<script>
+(function() {
+  const btn = document.getElementById("depsBtn");
+  if (!btn) return;
+
+  async function poll() {
+    try {
+      const res = await fetch("/admin/release/{{ r.name }}/deps_status");
+      const data = await res.json();
+
+      if (data.status === "running") {
+        btn.disabled = true;
+        btn.textContent = `Installing... ${data.progress}%`;
+        setTimeout(poll, 800);
+      } else if (data.status === "done") {
+        btn.disabled = true;
+        btn.textContent = "Installed ✅";
+      } else if (data.status === "error") {
+        btn.disabled = false;
+        btn.textContent = "Install deps (retry)";
+      } else {
+        btn.disabled = false;
+        btn.textContent = "Install missing deps";
+      }
+    } catch (e) {
+      // silent fail
+    }
+  }
+
+  poll();
+})();
+</script>
+

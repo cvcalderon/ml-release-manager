@@ -1,13 +1,13 @@
 [Unit]
-Description=ML Release Manager - Deployed Service
+Description=ML Release Manager - Deployed Service (per-release venv)
 After=network.target
 
 [Service]
 User=serviceuser
 WorkingDirectory=/opt/release_manager/current
 
-# Generic FastAPI service entrypoint
-ExecStart=/opt/release_manager/venv/bin/uvicorn service.app:app --host 0.0.0.0 --port 8000
+ExecStartPre=/usr/bin/test -x /opt/release_manager/current/.venv/bin/python
+ExecStart=/opt/release_manager/current/.venv/bin/python -m uvicorn service.app:app --host 0.0.0.0 --port 8000
 
 Restart=always
 RestartSec=2
