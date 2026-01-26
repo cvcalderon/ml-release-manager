@@ -16,13 +16,18 @@ This manual describes how to replicate the **ml-release-manager** MVP on a fresh
 ```
 /opt/release_manager/
   releases/
-    <release_1>/
-    <release_2>/
+    <release_name>/
+      service/
+      assets/
+      release.json
+      validation_report.json
+      release_bundle.zip
+      .venv/                  (per-release venv)
   current -> /opt/release_manager/releases/<active_release>
   runtime/
     uploads/
     logs/
-  venv/                # shared venv used by admin panel (and optionally service)
+  venv/                       (shared venv for Admin Panel only)
 ```
 
 ### Services (systemd)
@@ -192,14 +197,15 @@ Content (recommended deployment model: **run from `/opt/release_manager/current`
 
 ```ini
 [Unit]
-Description=ML Release Manager - Deployed Service
+Description=ML Release Manager - Deployed Service (per-release venv)
 After=network.target
 
 [Service]
 User=serviceuser
 WorkingDirectory=/opt/release_manager/current
 
-ExecStart=/opt/release_manager/venv/bin/uvicorn service.app:app --host 0.0.0.0 --port 8000
+ExecStartPre=/usr/bin/test -x /opt/release_manager/current/.venv/bin/python
+ExecStart=/opt/release_manager/current/.venv/bin/python -m uvicorn service.app:app --host 0.0.0.0 --port 8000
 
 Restart=always
 RestartSec=2
@@ -453,8 +459,7 @@ Common causes:
 ---
 
 ## 15) Reference docs included in the repo
-- `docs/DEPLOYMENT_NOTES.md`
-- `docs/CONFIG_SNAPSHOTS.md`
+- `docs/install_manual.md`
 - `docs/RELEASE_BUNDLE_SPEC_v1.txt`
 
 ---
