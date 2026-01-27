@@ -78,7 +78,11 @@ git clone https://github.com/cvcalderon/ml-release-manager.git
 cd ml-release-manager
 ```
 
-> If `serviceuser` does not exist yet, run the base install script first (next step).
+> If `serviceuser` does not exist yet, create with:
+> 
+```bash
+sudo adduser --disabled-password --gecos "" serviceuser
+```
 
 ---
 
@@ -290,8 +294,10 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+    client_max_body_size 200m;
 }
 ```
+In server_name, set your domain or IP (e.g., 192.168.1.10).
 
 Enable site:
 ```bash
